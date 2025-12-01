@@ -1,0 +1,5 @@
+---
+domain: "ping.pong"
+nm_path: "/etc/NetworkManager/system-connections/"
+pdc: "dc01"
+pdc_ip: 10.0.1.15
