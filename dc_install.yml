@@ -2,7 +2,6 @@
 - name: DC | Install package
   hosts: dc02
   vars_files: secret.yml
-  strategy: free
   become: true
   
   handlers:
