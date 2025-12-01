@@ -2,7 +2,6 @@
 - name: Red Adm | Install package
   hosts: dc01
   vars_files: secret.yml
-  strategy: free
   become: True
   handlers:
     - name: restart NetworkManager service
