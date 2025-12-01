@@ -1,0 +1,23 @@
+
+[connection]
+id={{ ansible_default_ipv4.interface }}
+uuid={{ def_net_dev_uuid.stdout_lines[0] }}
+type=ethernet
+autoconnect-priority=-999
+interface-name={{ ansible_default_ipv4.interface }}
+
+[ethernet]
+
+[ipv4]
+method=manual
+address1={{ ansible_default_ipv4.address }}/24,{{ ansible_default_ipv4.gateway }}
+dns={{ pdc_ip }};
+dns-search={{ domain }};
+ignore-auto-dns=true
+
+[ipv6]
+addr-gen-mode=eui64
+method=auto
+
+[proxy]
+#proverka
