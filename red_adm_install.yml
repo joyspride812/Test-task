@@ -1,0 +1,75 @@
+---
+- name: Red Adm | Install package
+  hosts: dc01
+  vars_files: secret.yml
+  strategy: free
+  become: True
+  handlers:
+    - name: restart NetworkManager service
+      become: true
+      service:
+        name: NetworkManager
+        state: restarted
+ 
+  
+  tasks:
+    - name: Red Adm | dnf update
+      dnf:
+         update_cache: yes
+    - name: Red Adm | DNF upgrade
+      dnf:
+        name: "*"
+        state: latest
+    - name: Red Adm | Install redadm
+      dnf:
+        name:
+          - redadm
+        state: present
+    - name: Red Adm | set server.conf
+      template:
+        src: server.conf.j2
+        dest:   /etc/redadm/server.conf
+        mode: 0700
+        owner:  redadm_local_service_user
+        group:  redadm_local_service_user
+        force: True
+    - name: Red Adm | encrypt password
+      shell: 
+        cmd:  /opt/redadm/.venv/bin/python /opt/redadm/scripts/encrypt_config.py -a "PASSWORD_LDAP"
+        executable: /bin/bash
+    - name: Red Adm | set client.conf
+      template:
+        src: client.conf.j2
+        dest:   /etc/redadm/client.conf
+        mode: 0700
+        owner:  redadm_local_service_user
+        group:  redadm_local_service_user
+        force: True
+    - name: restart NetworkManager service
+      service:
+        name: "{{ item  }}"
+        state: restarted
+        enabled: True
+      with_items:
+        - redadm.service
+        - redis.service
+        - redadm-celery-worker.service
+        - redadm-celery-beat.service
+        - nginx.service
+    - name: copy nginx.conf
+      copy:
+        dest: /etc/nginx/nginx.conf
+        src:  nginx.conf
+        mode: 0755
+        owner: root
+        group: root
+        force: True
+    - name: restart redadm\nginx service
+      service:
+        name: "{{ item  }}"
+        state: restarted
+        enabled: True
+      with_items:
+        - redadm.service
+        - nginx.service
+       

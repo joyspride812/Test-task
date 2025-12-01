@@ -1,0 +1,186 @@
+---
+- name: DC | Install package
+  hosts: dc02
+  vars_files: secret.yml
+  strategy: free
+  become: true
+  
+  handlers:
+    - name: restart NetworkManager service
+      become: true
+      service:
+        name: NetworkManager
+        state: restarted
+    - name: restart samba service
+      become: True
+      service:
+        name: samba
+        state: restarted
+        enabled: true
+    - name: restart named service
+      become: True
+      service:
+        name: named
+        state: restarted
+        enabled: true
+    - name: restart chrony service
+      become: True
+      service:
+        name: chronyd
+        state: restarted
+        enabled: true
+        
+ 
+  tasks:
+    - name: DC | Get facts
+      debug:
+        msg: 
+          - "OS: {{ ansible_lsb.description }}"
+          - "Vendor: {{ ansible_lsb.id }}"
+          - "Major release: {{ ansible_lsb.major_release }}"
+          - "Local IP: {{ ansible_all_ipv4_addresses[0] }}"
+      register: audit
+
+    - name: DC | Check OS version
+      assert:
+        that:
+          -  ansible_lsb.description | regex_search('^RED OS.*') 
+        fail_msg: "Целевая ОС не Red OS! {{ ansible_lsb.description }}"
+        success_msg: "ОС: {{ ansible_lsb.description }}"
+    
+    
+    
+    - name: DC | DNF update
+      dnf:
+         update_cache: yes
+    - name: DC | DNF upgrade
+      dnf:
+        name: "*"
+        state: latest
+
+    - name: DC | Install samba krb5 bind
+      dnf:
+        name:
+          - "samba*"
+          - "krb5*"
+          - bind
+          - chrony
+        state: present   
+
+    - name: DC |SElinux -> permissive
+      shell:
+        cmd: "setenforce 0;sed -i \"s/SELINUX=enforcing/SELINUX=permissive/\" /etc/selinux/config"
+        executable:  /bin/bash
+
+    - name: DC | Set hostname
+      shell: 
+        cmd: "hostnamectl set-hostname {{ inventory_hostname }}.{{ domain }}"
+        executable: /bin/bash
+    
+    
+    - name: DC | Get UUID default network device
+      shell: 
+        cmd: "nmcli -t -f UUID,DEVICE connection show |grep {{ ansible_default_ipv4.interface }}|cut -d: -f1"
+        executable: /bin/bash
+      register: def_net_dev_uuid
+
+    - name: DC | set nmconnection
+      template:
+        src: nmconnection.j2
+        mode: 0600
+        dest: "{{ nm_path }}/{{ ansible_default_ipv4.interface }}.nmconnection"
+        force: True
+      notify: restart NetworkManager service
+    - meta: flush_handlers
+
+    - name: DC | smb.conf.back/krb5.conf.back
+      shell: 
+        cmd: "mv /etc/samba/smb.conf /etc/samba/smb.conf.bak;cp /etc/krb5.conf /etc/krb5.conf.bak"
+        executable: /bin/bash
+
+    - name: DC | set krb5.conf
+      template:
+        src: krb5.conf.j2
+        dest:   /etc/krb5.conf
+        mode: 0644
+        owner:  root
+        group:  named
+        force: True
+
+    - name: DC | copy crypto-policies
+      copy:
+        dest: /usr/share/crypto-policies/DEFAULT/krb5.txt
+        src:  crypto-policies
+        mode: 0644
+        owner: root
+        group: root
+        force: True
+
+    - name: DC | set named.conf
+      template:
+        src: named.conf.j2
+        dest: /etc/named.conf
+        mode: 0640
+        owner: root
+        group: named
+        force: True
+    - name: DC | Samba configuration
+      shell:
+        cmd: |
+          samba-tool domain provision \
+          --realm={{ domain | upper }} \
+          --domain={{ domain.split('.')[0] | upper }} \
+          --server-role=dc \
+          --dns-backend=BIND9_DLZ \
+          --adminpass={{ password }} \
+          --use-rfc2307 \
+        executable: /bin/bash
+      when:  inventory_hostname  == pdc
+
+    - name: DC | Samba configuration additional dc
+      shell:
+        cmd: |
+          samba-tool domain join {{ domain }} DC \
+          -U "Administrator%{{ password }}" \
+          --dns-backend=BIND9_DLZ \
+          --realm={{ domain | upper }} \
+        executable: /bin/bash
+      when:  inventory_hostname  != pdc
+
+    - name: DC | set smb
+      template:
+        src: smb.conf.j2
+        dest: /etc/samba/smb.conf
+        mode: 0644
+        owner: root
+        group: root
+        force: True
+      notify:
+        - restart samba service
+        - restart named service
+    - meta: flush_handlers
+    - name: DC |SElinux -> enforcing
+      shell:
+        cmd: "setenforce 1;sed -i \"s/SELINUX=permissive/SELINUX=enforcing/\" /etc/selinux/config"
+        executable:  /bin/bash
+    - set_fact:
+        ptr_zone: "{{ ansible_default_ipv4.address.split('.')[:3] | reverse | join('.') }}.in-addr.arpa"
+        fourth_octet: "{{ ansible_default_ipv4.address.split('.')[3] }}"
+ 
+    - name: DNS | set PTR zone
+      shell:
+        cmd: |
+          samba-tool dns zonecreate {{ inventory_hostname }}.{{ domain }} {{ ptr_zone }} -U "Administrator%{{ password }}";
+          samba-tool dns add {{ inventory_hostname }}.{{ domain }} {{ ptr_zone }} {{ fourth_octet }} PTR {{ inventory_hostname }}.{{ domain }} -U "Administrator%{{ password }}"
+        executable: /bin/bash
+      when:  inventory_hostname  == pdc
+    
+    - name: DC | set chrony_conf
+      template:
+        src: "{{ 'chrony.conf.j2' if inventory_hostname  != pdc else 'chrony.pdc.conf.j2' }}"
+        mode: 0644
+        dest: /etc/chrony.conf
+        force: True
+      notify: restart chrony service
+    - meta: flush_handlers
+       
